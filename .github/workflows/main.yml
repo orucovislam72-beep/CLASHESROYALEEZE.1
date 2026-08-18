@@ -1,0 +1,296 @@
+name: Build Android Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: "Android Version Name"
+        required: true
+        default: "1.0.1"
+
+      versionCode:
+        description: "Android Version Code"
+        required: true
+        default: "2"
+
+jobs:
+  build-release:
+    name: Build & Sign Iron Dominion APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ─────────────────────────────────────────────
+      # 1. Checkout
+      # ─────────────────────────────────────────────
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      # ─────────────────────────────────────────────
+      # 2. Extract project ZIP
+      # ─────────────────────────────────────────────
+
+      - name: Extract Project
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="iron-dominion (30).zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "❌ ZIP file not found: $ZIP_FILE"
+            exit 1
+          fi
+
+          echo "📦 Extracting $ZIP_FILE..."
+
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "📁 Extracted files:"
+          find extracted -maxdepth 2 -type f | head -100
+
+          # Если ZIP содержит сам проект непосредственно
+          if [ -f "extracted/package.json" ]; then
+            cp -a extracted/. .
+          else
+            # Ищем package.json внутри первой подпапки
+            PROJECT_DIR=$(find extracted -name package.json -type f -print -quit | xargs dirname)
+
+            if [ -z "$PROJECT_DIR" ]; then
+              echo "❌ package.json not found inside ZIP"
+              exit 1
+            fi
+
+            echo "📂 Project directory: $PROJECT_DIR"
+            cp -a "$PROJECT_DIR"/. .
+          fi
+
+          echo "✅ Project extracted"
+
+          test -f package.json
+          test -d android
+          test -f android/gradlew
+          test -f android/gradle/wrapper/gradle-wrapper.jar
+
+
+      # ─────────────────────────────────────────────
+      # 3. Node
+      # ─────────────────────────────────────────────
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+
+      # ─────────────────────────────────────────────
+      # 4. Bun
+      # ─────────────────────────────────────────────
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+
+      # ─────────────────────────────────────────────
+      # 5. Install dependencies
+      # ─────────────────────────────────────────────
+
+      - name: Install Dependencies
+        run: bun install --frozen-lockfile
+
+
+      # ─────────────────────────────────────────────
+      # 6. Build React/Vite
+      # ─────────────────────────────────────────────
+
+      - name: Build Web Application
+        env:
+          VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: bun run build
+
+
+      # ─────────────────────────────────────────────
+      # 7. Capacitor sync
+      # ─────────────────────────────────────────────
+
+      - name: Sync Capacitor Android
+        run: bun x cap sync android
+
+
+      # ─────────────────────────────────────────────
+      # 8. Java
+      # ─────────────────────────────────────────────
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+
+      # ─────────────────────────────────────────────
+      # 9. Android SDK
+      # ─────────────────────────────────────────────
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # ─────────────────────────────────────────────
+      # 10. Restore release keystore
+      # ─────────────────────────────────────────────
+
+      - name: Restore Release Keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -e
+
+          required_secrets=(
+            "KEYSTORE_BASE64"
+            "KEYSTORE_PASSWORD"
+            "KEY_ALIAS"
+            "KEY_PASSWORD"
+          )
+
+          for secret in "${required_secrets[@]}"; do
+            if [ -z "${!secret}" ]; then
+              echo "❌ Missing required secret: $secret"
+              exit 1
+            fi
+          done
+
+          mkdir -p android
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/release.keystore
+
+          if [ ! -s android/release.keystore ]; then
+            echo "❌ release.keystore is empty"
+            exit 1
+          fi
+
+          echo "✅ Release keystore restored"
+
+
+      # ─────────────────────────────────────────────
+      # 11. Make Gradle Wrapper executable
+      # ─────────────────────────────────────────────
+
+      - name: Prepare Gradle Wrapper
+        run: |
+          chmod +x android/gradlew
+
+          echo "Checking Gradle Wrapper..."
+
+          file android/gradle/wrapper/gradle-wrapper.jar
+          unzip -t android/gradle/wrapper/gradle-wrapper.jar > /dev/null
+
+          echo "✅ Gradle Wrapper JAR is valid"
+
+
+      # ─────────────────────────────────────────────
+      # 12. Build Release APK
+      # ─────────────────────────────────────────────
+
+      - name: Build Release APK
+        working-directory: android
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/android/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -e
+
+          VERSION_CODE="${{ github.event.inputs.versionCode }}"
+          VERSION_NAME="${{ github.event.inputs.versionName }}"
+
+          echo "🔨 Building Iron Dominion"
+          echo "Version Code: $VERSION_CODE"
+          echo "Version Name: $VERSION_NAME"
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleRelease \
+            -PversionCode="$VERSION_CODE" \
+            -PversionName="$VERSION_NAME"
+
+
+      # ─────────────────────────────────────────────
+      # 13. Find APK
+      # ─────────────────────────────────────────────
+
+      - name: Package APK
+        id: package_apk
+        shell: bash
+        run: |
+          set -e
+
+          APK_PATH=$(find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK not found!"
+            echo "Build directory:"
+            find android/app/build -type f | head -100
+            exit 1
+          fi
+
+          VERSION_NAME="${{ github.event.inputs.versionName }}"
+          APK_NAME="iron-dominion-v${VERSION_NAME}-release.apk"
+
+          mkdir -p dist_apk
+
+          cp "$APK_PATH" "dist_apk/$APK_NAME"
+
+          echo "apk_path=dist_apk/$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+
+          echo "✅ APK created:"
+          ls -lh "dist_apk/$APK_NAME"
+
+
+      # ─────────────────────────────────────────────
+      # 14. Verify APK
+      # ─────────────────────────────────────────────
+
+      - name: Verify APK
+        run: |
+          set -e
+
+          APK="${{ steps.package_apk.outputs.apk_path }}"
+
+          if [ ! -f "$APK" ]; then
+            echo "❌ APK does not exist"
+            exit 1
+          fi
+
+          echo "📱 APK:"
+          ls -lh "$APK"
+
+          echo "🔐 APK signature:"
+          $ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner verify --verbose "$APK"
+
+
+      # ─────────────────────────────────────────────
+      # 15. Upload artifact
+      # ─────────────────────────────────────────────
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package_apk.outputs.apk_name }}
+          path: dist_apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
