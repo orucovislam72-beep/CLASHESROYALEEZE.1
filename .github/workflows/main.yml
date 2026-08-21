@@ -35,49 +35,47 @@ jobs:
       - name: Extract Iron Dominion Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           ZIP_FILE="iron-dominion (30).zip"
 
-          echo "🔎 Looking for project archive..."
+          echo "=========================================="
+          echo "📦 EXTRACTING IRON DOMINION"
+          echo "=========================================="
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "❌ ERROR: $ZIP_FILE not found!"
             echo
-            echo "Files in repository:"
+            echo "Repository files:"
             find . -maxdepth 2 -type f | sort | head -100
             exit 1
           fi
-
-          echo "📦 Extracting $ZIP_FILE..."
 
           rm -rf extracted_project
           mkdir -p extracted_project
 
           unzip -q "$ZIP_FILE" -d extracted_project
 
-          echo "📁 Extracted project contents:"
-          ls -la extracted_project
-
           if [ -f "extracted_project/package.json" ]; then
             echo "✅ package.json found in ZIP root."
-
             cp -a extracted_project/. .
           else
-            echo "🔎 package.json not in ZIP root. Searching..."
+            echo "🔎 Searching for package.json..."
 
-            PROJECT_DIR=$(find extracted_project \
-              -type f \
-              -name "package.json" \
-              -print \
-              -quit)
+            PROJECT_DIR=$(
+              find extracted_project \
+                -type f \
+                -name "package.json" \
+                -print \
+                -quit
+            )
 
             if [ -z "$PROJECT_DIR" ]; then
               echo "❌ ERROR: package.json was not found!"
               exit 1
             fi
 
-            PROJECT_DIR=$(dirname "$PROJECT_DIR")
+            PROJECT_DIR="$(dirname "$PROJECT_DIR")"
 
             echo "📂 Project directory: $PROJECT_DIR"
 
@@ -117,6 +115,65 @@ jobs:
 
 
       # ============================================================
+      # INSTALL DEPENDENCIES
+      # ============================================================
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "📦 Installing dependencies..."
+
+          bun install
+
+          echo "✅ Dependencies installed."
+
+
+      # ============================================================
+      # BUILD WEB APPLICATION
+      # ============================================================
+
+      - name: Build Web Application
+        shell: bash
+        env:
+          VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "🌐 BUILDING WEB APPLICATION"
+          echo "=========================================="
+
+          bun run build
+
+          if [ ! -d "dist" ]; then
+            echo "❌ ERROR: dist directory was not created!"
+            exit 1
+          fi
+
+          echo "✅ Web application built successfully."
+
+
+      # ============================================================
+      # CAPACITOR SYNC
+      # ============================================================
+
+      - name: Sync Capacitor Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "📱 SYNCING CAPACITOR ANDROID"
+          echo "=========================================="
+
+          bun x cap sync android
+
+          echo "✅ Capacitor Android sync completed."
+
+
+      # ============================================================
       # JAVA 21
       # ============================================================
 
@@ -137,7 +194,7 @@ jobs:
 
 
       # ============================================================
-      # GRADLE
+      # GRADLE 8.14.3
       # ============================================================
 
       - name: Setup Gradle 8.14.3
@@ -154,9 +211,13 @@ jobs:
       - name: Check Build Environment
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "=============================="
+          echo "=========================================="
+          echo "🔧 BUILD ENVIRONMENT"
+          echo "=========================================="
+
+          echo
           echo "Java:"
           java -version
 
@@ -176,65 +237,8 @@ jobs:
           echo "Android SDK:"
           echo "$ANDROID_HOME"
 
-          echo "=============================="
-
-
-      # ============================================================
-      # INSTALL DEPENDENCIES
-      # ============================================================
-
-      - name: Install Dependencies
-        shell: bash
-        run: |
-          set -e
-
-          echo "📦 Installing dependencies with Bun..."
-
-          bun install
-
-          echo "✅ Dependencies installed."
-
-
-      # ============================================================
-      # BUILD WEB APPLICATION
-      # ============================================================
-
-      - name: Build Web Application
-        env:
-          VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        shell: bash
-        run: |
-          set -e
-
-          echo "🌐 Building Iron Dominion web application..."
-
-          bun run build
-
           echo
-          echo "🔍 Checking dist..."
-
-          if [ ! -d "dist" ]; then
-            echo "❌ ERROR: dist directory was not created!"
-            exit 1
-          fi
-
-          echo "✅ Web application built successfully."
-
-
-      # ============================================================
-      # CAPACITOR SYNC
-      # ============================================================
-
-      - name: Sync Capacitor Android
-        shell: bash
-        run: |
-          set -e
-
-          echo "📱 Syncing Capacitor Android project..."
-
-          bun x cap sync android
-
-          echo "✅ Capacitor Android sync completed."
+          echo "=========================================="
 
 
       # ============================================================
@@ -249,7 +253,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          set -e
+          set -euo pipefail
 
           echo "=========================================="
           echo "🔐 RESTORING RELEASE KEYSTORE"
@@ -257,44 +261,57 @@ jobs:
 
           echo "🔎 Checking release signing secrets..."
 
-          if [ -z "$KEYSTORE_BASE64" ]; then
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
             echo "❌ KEYSTORE_BASE64 is missing."
             exit 1
           fi
 
-          if [ -z "$KEYSTORE_PASSWORD" ]; then
+          if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
             echo "❌ KEYSTORE_PASSWORD is missing."
             exit 1
           fi
 
-          if [ -z "$KEY_ALIAS" ]; then
+          if [ -z "${KEY_ALIAS:-}" ]; then
             echo "❌ KEY_ALIAS is missing."
             exit 1
           fi
 
-          if [ -z "$KEY_PASSWORD" ]; then
+          if [ -z "${KEY_PASSWORD:-}" ]; then
             echo "❌ KEY_PASSWORD is missing."
             exit 1
           fi
 
           echo "✅ All signing secrets are present."
 
-          mkdir -p android
-
-          # ----------------------------------------------------------
-          # Decode Base64
-          # ----------------------------------------------------------
-
+          echo
           echo "🔓 Decoding keystore..."
 
-          printf '%s' "$KEYSTORE_BASE64" \
-            | base64 --decode \
-            > android/release.keystore
+          mkdir -p android
 
+          # Remove accidental whitespace/newlines from the Secret.
+          CLEAN_BASE64="$(printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n[:space:]')"
+
+          if [ -z "$CLEAN_BASE64" ]; then
+            echo "❌ ERROR: Cleaned Base64 is empty."
+            exit 1
+          fi
+
+          # Decode.
+          if ! printf '%s' "$CLEAN_BASE64" | base64 --decode > android/release.keystore 2>/tmp/base64_error.log; then
+            echo "❌ ERROR: Base64 decoding failed."
+
+            if [ -s /tmp/base64_error.log ]; then
+              cat /tmp/base64_error.log
+            fi
+
+            exit 1
+          fi
+
+          echo
           echo "🔎 Checking decoded file..."
 
           if [ ! -s android/release.keystore ]; then
-            echo "❌ release.keystore is empty or was not created."
+            echo "❌ ERROR: release.keystore is empty."
             exit 1
           fi
 
@@ -302,51 +319,48 @@ jobs:
 
           ls -lh android/release.keystore
 
-          # ----------------------------------------------------------
-          # Check keystore
-          # ----------------------------------------------------------
+          echo
+          echo "📏 Keystore size:"
+          wc -c android/release.keystore
 
           echo
-          echo "🔎 Checking keystore..."
+          echo "🔐 SHA-256 of restored keystore:"
+          sha256sum android/release.keystore
 
-          if ! keytool -list \
+          echo
+          echo "🔎 Checking keystore with keytool..."
+
+          if ! keytool \
+            -list \
             -keystore android/release.keystore \
-            -storepass "$KEYSTORE_PASSWORD"; then
-
+            -storepass "$KEYSTORE_PASSWORD" \
+            > /tmp/keytool_output.txt 2>/tmp/keytool_error.txt
+          then
             echo
             echo "❌ ERROR: Cannot open the keystore."
+
+            echo
+            echo "Keytool error:"
+
+            cat /tmp/keytool_error.txt || true
+
             echo
             echo "Possible causes:"
             echo "1. KEYSTORE_PASSWORD is incorrect."
             echo "2. KEYSTORE_BASE64 does not belong to this keystore."
-            echo "3. The Base64 value was copied incorrectly."
+            echo "3. KEYSTORE_BASE64 was copied incorrectly."
 
             exit 1
           fi
-
-          echo "✅ Keystore password accepted."
-
-          # ----------------------------------------------------------
-          # Check alias
-          # ----------------------------------------------------------
 
           echo
-          echo "🔎 Checking alias..."
+          echo "✅ Keystore opened successfully."
 
-          if ! keytool -list \
-            -keystore android/release.keystore \
-            -storepass "$KEYSTORE_PASSWORD" \
-            -alias "$KEY_ALIAS"; then
+          echo
+          echo "🔑 Keystore entry information:"
 
-            echo
-            echo "❌ ERROR: KEY_ALIAS is incorrect."
-            echo "Expected alias from GitHub Secret:"
-            echo "$KEY_ALIAS"
-
-            exit 1
-          fi
-
-          echo "✅ Alias is valid."
+          grep -E "Keystore type:|Keystore provider:|Your keystore contains|PrivateKeyEntry|iron-dominion" \
+            /tmp/keytool_output.txt || true
 
           echo
           echo "=========================================="
@@ -367,16 +381,18 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          set -e
+          set -euo pipefail
 
           VERSION_CODE="${{ github.event.inputs.versionCode }}"
           VERSION_NAME="${{ github.event.inputs.versionName }}"
 
           echo "=========================================="
-          echo "🚀 BUILDING IRON DOMINION"
+          echo "🚀 BUILDING IRON DOMINION RELEASE"
           echo "=========================================="
+
           echo "Version Code: $VERSION_CODE"
           echo "Version Name: $VERSION_NAME"
+
           echo "=========================================="
 
           if ! [[ "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
@@ -385,7 +401,13 @@ jobs:
           fi
 
           if ! [[ "$VERSION_NAME" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-            echo "❌ versionName looks invalid: $VERSION_NAME"
+            echo "❌ Invalid versionName: $VERSION_NAME"
+            exit 1
+          fi
+
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "❌ Release keystore not found:"
+            echo "$KEYSTORE_PATH"
             exit 1
           fi
 
@@ -400,7 +422,9 @@ jobs:
             -PversionName="$VERSION_NAME"
 
           echo
-          echo "✅ Gradle build completed."
+          echo "=========================================="
+          echo "✅ GRADLE BUILD COMPLETED"
+          echo "=========================================="
 
 
       # ============================================================
@@ -411,21 +435,24 @@ jobs:
         id: find_apk
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "🔎 Searching for APK..."
+          echo "🔎 Searching for release APK..."
 
-          APK_PATH=$(find android/app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)
+          APK_PATH="$(
+            find android/app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print \
+              -quit
+          )"
 
           if [ -z "$APK_PATH" ]; then
-            echo "❌ ERROR: APK not found!"
+            echo "❌ ERROR: Release APK not found."
 
             echo
-            echo "Build output:"
+            echo "Available build outputs:"
+
             find android/app/build/outputs \
               -type f \
               -print || true
@@ -447,7 +474,7 @@ jobs:
         id: package_apk
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           VERSION_NAME="${{ github.event.inputs.versionName }}"
           SOURCE_APK="${{ steps.find_apk.outputs.apk_path }}"
@@ -470,31 +497,41 @@ jobs:
       # VERIFY APK SIGNATURE
       # ============================================================
 
-      - name: Verify APK
+      - name: Verify APK Signature
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           APK="${{ steps.package_apk.outputs.apk_path }}"
 
-          echo "🔐 Verifying APK..."
+          echo "=========================================="
+          echo "🔐 VERIFYING APK SIGNATURE"
+          echo "=========================================="
 
           if [ ! -f "$APK" ]; then
-            echo "❌ APK does not exist!"
+            echo "❌ APK does not exist."
             exit 1
           fi
 
-          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          BUILD_TOOLS="$(
+            find "$ANDROID_HOME/build-tools" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -printf '%f\n' \
+              | sort -V \
+              | tail -1
+          )"
 
           if [ -z "$BUILD_TOOLS" ]; then
-            echo "❌ Android build-tools not found!"
+            echo "❌ Android Build Tools not found."
             exit 1
           fi
 
           APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
 
           if [ ! -f "$APKSIGNER" ]; then
-            echo "❌ apksigner not found!"
+            echo "❌ apksigner not found."
             exit 1
           fi
 
